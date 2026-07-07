@@ -1,0 +1,7 @@
+jupyterlab
+scipy 
+numpy
+matplotlib
+seaborn
+pandas
+jax 

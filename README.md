@@ -1,0 +1,1 @@
+### Place to store sample miniprojects to get use to the PhD research focus on MCMC, Sampling and AI tools like Normalizing Flow and Diffusion Model
