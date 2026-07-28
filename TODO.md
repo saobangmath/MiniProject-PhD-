@@ -1,0 +1,3 @@
+- Jax dive deep. 
+- SEIR to see its fit in the SMCS. 
+- Read paper related to SMCS
