@@ -1,1 +1,6 @@
-### Place to store sample miniprojects to get use to the PhD research focus on MCMC, Sampling and AI tools like Normalizing Flow and Diffusion Model
+### Place to store sample miniprojects to get use to the PhD research ###
+
+Topics covered: 
+
+1. MCMC - SMC
+2. Simulated Tempering (ST) 
