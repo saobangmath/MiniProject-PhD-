@@ -6,3 +6,4 @@ seaborn
 pandas
 jax 
 tqdm
+diffrax
