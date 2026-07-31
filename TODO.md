@@ -1,3 +1,4 @@
 - Jax dive deep. 
-- SEIR to see its fit in the SMCS. 
-- Read paper related to SMCS
+- SEIR to see its fit in the SMCS. [Done] 
+- Read paper related to SMCS. [Done - Reread whenever have more background]
+- Try tuning prior for SIR 
