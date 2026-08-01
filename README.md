@@ -1,4 +1,4 @@
-### Place to store sample miniprojects to get use to the PhD research ###
+### Sample miniprojects to get use to the PhD research ###
 
 Topics covered: 
 
