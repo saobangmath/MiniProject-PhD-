@@ -1,4 +1,5 @@
 .PHONY: install venv
+SHELL := /bin/bash
 
 VENV := .venv
 
