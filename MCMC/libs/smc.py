@@ -12,7 +12,7 @@ MAGIC_CONST = 2.38
 ESS_THRESHOLD = 0.75
 
 class SMC:
-    def __init__(self, dims, target_dist_logpdf, prior_dist_logpdf = None, key = random.key(0)):
+    def __init__(self, dims, target_dist_logpdf, prior_dist_logpdf = None, proposed_fn = None, key = random.key(0)):
         self.__dims = dims
         self.__prior_dist_logpdf = prior_dist_logpdf
         self.__target_dist_logpdf = target_dist_logpdf
@@ -20,6 +20,7 @@ class SMC:
         self.__next_dist_id = 0
         self.__cur_samples = None
         self.__cur_samples_logpdf = None
+        self.__proposed_fn = proposed_fn
         self.__key = key
 
     def _split_key(self):
@@ -111,13 +112,7 @@ class SMC:
         idx = random.choice(k_resample, a=n, shape=(n,), p=weight, replace=True)
         samples = samples[idx]
 
-        move_cov = jnp.atleast_2d(jnp.cov(samples, rowvar=False))
-        move_cov = (MAGIC_CONST / self.__dims) * move_cov
-        mean0 = jnp.zeros(self.__dims)
-
-        def proposed_fn(x, k):
-            return x + random.multivariate_normal(k, mean=mean0, cov=move_cov)
-
+        proposed_fn = self._get_proposed_fn(samples)
         mcmc = MCMC(next_logpdf, proposed_fn, tracker=None)
         next_samples = mcmc.run_batch(samples, k_mcmc, iters=mcmc_iters)
         return next_samples, next_logpdf(next_samples), key
@@ -134,14 +129,8 @@ class SMC:
             key, a=no_samples, shape=(no_samples,), p=weight, replace=True
         )
         next_samples = self.__cur_samples[indexes]
-
-        move_cov = jnp.atleast_2d(jnp.cov(next_samples, rowvar=False))
-        move_cov = (MAGIC_CONST / self.__dims) * move_cov
-        mean0 = jnp.zeros(self.__dims)
-
-        def proposed_fn(x, key):
-            return x + random.multivariate_normal(key, mean=mean0, cov=move_cov)
-
+        
+        proposed_fn = self._get_proposed_fn(next_samples)
         mcmc = MCMC(next_dist_logpdf, proposed_fn, tracker=None)
         key = self._split_key()
         next_samples = mcmc.run_batch(next_samples, key, iters=10)
@@ -199,6 +188,21 @@ class SMC:
         self.__key = key
 
         return [float(x) for x in lambdas[~jnp.isnan(lambdas)]]
+
+    def _get_proposed_fn(self, samples):
+        r"""
+            get proposed fn to move samples
+        """
+        
+        # incase there is a proposed_fn already define for the specific problem domain
+        if self.__proposed_fn is not None:
+            return self.__proposed_fn
+
+        move_cov = jnp.atleast_2d(jnp.cov(samples, rowvar=False))
+        move_cov = (MAGIC_CONST / self.__dims) * move_cov
+        mean0 = jnp.zeros(self.__dims)
+
+        return lambda x, key: x + random.multivariate_normal(key, mean=mean0, cov=move_cov)
 
 if __name__ == "__main__":
     pass 
