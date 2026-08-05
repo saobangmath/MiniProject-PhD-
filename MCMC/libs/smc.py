@@ -106,6 +106,7 @@ class SMC:
 
         log_w = next_logpdf(samples) - cur_logpdf
         weight = jnp.exp(log_w - jax.nn.logsumexp(log_w))
+        diff_log_z = jax.nn.logsumexp(log_w) - jnp.log(len(weight)) # log(z_(i+1)) - log(z_i)
 
         key, k_resample, k_mcmc = random.split(key, 3)
         n = samples.shape[0]
@@ -115,7 +116,7 @@ class SMC:
         proposed_fn = self._get_proposed_fn(samples)
         mcmc = MCMC(next_logpdf, proposed_fn, tracker=None)
         next_samples = mcmc.run_batch(samples, k_mcmc, iters=mcmc_iters)
-        return next_samples, next_logpdf(next_samples), key
+        return next_samples, next_logpdf(next_samples), diff_log_z, key
 
     def __sample_next_dist(self, next_dist_logpdf):
         r"""Manual-schedule step used by sample_loop."""
@@ -155,39 +156,41 @@ class SMC:
             self.__key,
             jnp.asarray(0.0),   # lambda_cur
             jnp.asarray(0),     # step index
-            lambdas,
+            lambdas,   
+            0, # tot_diff_log_z 
         )
 
         def cond(carry):
-            samples, _, _, lam, t, _ = carry
+            samples, _, _, lam, t, _, _ = carry
             log_ratio = target(samples) - base(samples)
             ess_to_one = self.__relative_ess(log_ratio, 1.0 - lam)
             return (ess_to_one < ESS_THRESHOLD) & (t < max_steps) & (lam < 1.0 - 1e-5)
 
         def body(carry):
-            samples, cur_lp, key, lam, t, lambdas = carry
+            samples, cur_lp, key, lam, t, lambdas, tot_diff_log_z = carry
             jax.debug.print("Current loop value: {lam}", lam=lam)
             log_ratio = target(samples) - base(samples)
             lam_next = self.__find_next_lambda(log_ratio, lam, n_bisect=n_bisect)
-            samples, cur_lp, key = self.__temper_step(
+            samples, cur_lp, diff_log_z, key = self.__temper_step(
                 samples, cur_lp, key, lam_next, mcmc_iters=mcmc_iters
             )
             lambdas = lambdas.at[t + 1].set(lam_next)
-            return samples, cur_lp, key, lam_next, t + 1, lambdas
+            return samples, cur_lp, key, lam_next, t + 1, lambdas, tot_diff_log_z + diff_log_z
 
-        samples, cur_lp, key, lam, t, lambdas = lax.while_loop(cond, body, init)
+        samples, cur_lp, key, lam, t, lambdas, tot_diff_log_z = lax.while_loop(cond, body, init)
 
         # final jump to lambda = 1
-        samples, cur_lp, key = self.__temper_step(
+        samples, cur_lp, diff_log_z, key = self.__temper_step(
             samples, cur_lp, key, 1.0, mcmc_iters=mcmc_iters
         )
         lambdas = lambdas.at[t + 1].set(1.0)
+        tot_diff_log_z += diff_log_z
 
         self.__cur_samples = samples
         self.__cur_samples_logpdf = cur_lp
         self.__key = key
 
-        return [float(x) for x in lambdas[~jnp.isnan(lambdas)]]
+        return [float(x) for x in lambdas[~jnp.isnan(lambdas)]], tot_diff_log_z
 
     def _get_proposed_fn(self, samples):
         r"""
