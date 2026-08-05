@@ -106,7 +106,9 @@ class SMC:
 
         log_w = next_logpdf(samples) - cur_logpdf
         weight = jnp.exp(log_w - jax.nn.logsumexp(log_w))
-        diff_log_z = jax.nn.logsumexp(log_w) - jnp.log(len(weight)) # log(z_(i+1)) - log(z_i)
+
+        # log(z_(i+1)) - log(z_i) = log(1 / N * sigma weight)
+        diff_log_z = jax.nn.logsumexp(weight) - jnp.log(len(weight)) 
 
         key, k_resample, k_mcmc = random.split(key, 3)
         n = samples.shape[0]
