@@ -7,3 +7,4 @@ pandas
 jax 
 tqdm
 diffrax
+scikit-learn
