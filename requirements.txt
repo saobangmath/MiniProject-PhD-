@@ -8,3 +8,4 @@ jax
 tqdm
 diffrax
 scikit-learn
+ucimlrepo
