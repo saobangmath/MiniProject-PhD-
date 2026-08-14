@@ -170,7 +170,7 @@ class SMC:
 
         def body(carry):
             samples, cur_lp, key, lam, t, lambdas, tot_diff_log_z = carry
-            jax.debug.print("Current loop value: {lam}", lam=lam)
+            #jax.debug.print("Current loop value: {lam}", lam=lam)
             log_ratio = target(samples) - base(samples)
             lam_next = self.__find_next_lambda(log_ratio, lam, n_bisect=n_bisect)
             samples, cur_lp, diff_log_z, key = self.__temper_step(
