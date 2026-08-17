@@ -435,7 +435,167 @@ class RestrictedEnumerationSearch(SearchStrategy):
 
 
 class StochasticSearch(SearchStrategy):
-    """Metropolis-Hastings on model space targeting p(M) p_M(y)."""
+    """Metropolis-Hastings on model space.
+
+    Target (on log scale) uses the Stage-3 score
+        S(M) = log p(M) + log p_M(y) + E[log p(theta | M)]
+    so pi(M) ∝ exp(S(M)).
+
+    Proposal (paper Sec 9.4, add/delete only):
+      - with probability 0.5, add a uniformly chosen excluded variable
+      - with probability 0.5, delete a uniformly chosen included variable
+    At the empty model only add is allowed; at the full model only delete is allowed
+    (probabilities are renormalized to 1).
+
+    Accept with
+        a = min(1, exp(S(M')-S(M)) * q(M|M') / q(M'|M))
+
+    Returns the highest-scoring model visited (plus its posterior alpha/betas).
+    """
+
+    def __init__(
+        self,
+        n_steps: int = 50,
+        p_add: float = 0.5,
+        p_delete: float = 0.5,
+        rng_seed: int | None = None,
+        **kwargs,
+    ):
+        super().__init__(**kwargs)
+        if n_steps < 1:
+            raise ValueError("n_steps must be >= 1")
+        if p_add < 0 or p_delete < 0:
+            raise ValueError("p_add and p_delete must be >= 0")
+        if p_add + p_delete <= 0:
+            raise ValueError("p_add + p_delete must be > 0")
+        self.n_steps = int(n_steps)
+        self.p_add = float(p_add)
+        self.p_delete = float(p_delete)
+        self.rng_seed = self.seed if rng_seed is None else int(rng_seed)
+
+    @staticmethod
+    def _model_size(mask: int) -> int:
+        return mask.bit_count() if hasattr(int, "bit_count") else bin(mask).count("1")
+
+    def _effective_move_probs(self, mask: int, n_predictors: int) -> tuple[float, float]:
+        """Renormalize add/delete probs when one move type is impossible."""
+        k = self._model_size(mask)
+        can_add = k < n_predictors
+        can_del = k > 0
+        p_add = self.p_add if can_add else 0.0
+        p_del = self.p_delete if can_del else 0.0
+        tot = p_add + p_del
+        if tot <= 0.0:
+            raise RuntimeError(f"no legal moves from mask={mask}")
+        return p_add / tot, p_del / tot
+
+    def _propose(self, mask: int, n_predictors: int, rng: np.random.Generator):
+        """Propose M' by add or delete; return (action, index, new_mask, q_fwd, q_rev)."""
+        k = self._model_size(mask)
+        p_add, p_del = self._effective_move_probs(mask, n_predictors)
+        included = [j for j in range(n_predictors) if mask & (1 << j)]
+        excluded = [j for j in range(n_predictors) if not (mask & (1 << j))]
+
+        do_add = rng.random() < p_add if (p_add > 0 and p_del > 0) else (p_add > 0)
+        if do_add:
+            j = int(rng.choice(excluded))
+            new_mask = mask | (1 << j)
+            q_fwd = p_add / len(excluded)
+            p_add_rev, p_del_rev = self._effective_move_probs(new_mask, n_predictors)
+            q_rev = p_del_rev / (k + 1)
+            return "add", j, new_mask, q_fwd, q_rev
+
+        j = int(rng.choice(included))
+        new_mask = mask ^ (1 << j)
+        q_fwd = p_del / len(included)
+        p_add_rev, p_del_rev = self._effective_move_probs(new_mask, n_predictors)
+        q_rev = p_add_rev / (n_predictors - k + 1)
+        return "delete", j, new_mask, q_fwd, q_rev
 
     def find(self, X, y, predictor_names: Sequence[str] | None = None) -> SearchResult:
-        raise NotImplementedError("StochasticSearch.find is not implemented yet")
+        X = np.asarray(X)
+        y = np.ravel(np.asarray(y))
+        n_predictors = X.shape[1]
+        names = self._names(n_predictors, predictor_names)
+        rng = np.random.default_rng(self.rng_seed)
+        cache: dict[int, dict] = {}
+
+        def evaluate(mask: int) -> dict:
+            if mask not in cache:
+                cache[mask] = self._score_model(mask, X, y, n_predictors)
+            return cache[mask]
+
+        current = evaluate(0)
+        best = current
+        n_accept = 0
+        history = [
+            {
+                "step": 0,
+                "action": None,
+                "variable": None,
+                "accepted": True,
+                "mask": 0,
+                "variables": [],
+                "log_evidence": current["log_evidence"],
+                "log_param_prior": current["log_param_prior"],
+                "score": current["score"],
+                "accept_prob": 1.0,
+            }
+        ]
+        if self.verbose:
+            print(
+                f"[mh] start intercept-only | "
+                f"log p_M(y)={current['log_evidence']:.4f} | "
+                f"log p(theta)={current['log_param_prior']:.4f} | S={current['score']:.4f}"
+            )
+            print(
+                f"[mh] n_steps={self.n_steps}, p_add={self.p_add}, p_delete={self.p_delete}"
+            )
+
+        for t in range(1, self.n_steps + 1):
+            action, j, new_mask, q_fwd, q_rev = self._propose(
+                current["mask"], n_predictors, rng
+            )
+            cand = evaluate(new_mask)
+            log_alpha = (cand["score"] - current["score"]) + (
+                np.log(q_rev) - np.log(q_fwd)
+            )
+            accept_prob = float(1.0 if log_alpha >= 0 else min(1.0, np.exp(log_alpha)))
+            accepted = rng.random() < accept_prob
+
+            if self.verbose:
+                print(
+                    f"  step {t:3d}: try {action:6} {names[j]:<20} | "
+                    f"S'={cand['score']:.4f} | a={accept_prob:.3f} | "
+                    f"{'ACCEPT' if accepted else 'reject'}"
+                )
+
+            if accepted:
+                current = cand
+                n_accept += 1
+                if current["score"] > best["score"]:
+                    best = current
+
+            history.append(
+                {
+                    "step": t,
+                    "action": action,
+                    "variable": names[j],
+                    "accepted": bool(accepted),
+                    "mask": current["mask"],
+                    "variables": [names[k] for k in current["included_indices"]],
+                    "log_evidence": current["log_evidence"],
+                    "log_param_prior": current["log_param_prior"],
+                    "score": current["score"],
+                    "accept_prob": accept_prob,
+                }
+            )
+
+        if self.verbose:
+            print(
+                f"[mh] done | accept_rate={n_accept / self.n_steps:.2f} | "
+                f"unique models={len(cache)} | "
+                f"best S={best['score']:.4f} | vars={[names[j] for j in best['included_indices']]}"
+            )
+
+        return self._to_result(best, names, history)
