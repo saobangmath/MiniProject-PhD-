@@ -146,19 +146,22 @@ def eval_posterior_predictive(particles, X, y):
     }
 
 
-def run_smc_on_data(X_obs, y_obs, no_samples=5_000, seed=42):
+def run_smc_on_data(X_obs, y_obs, no_samples=5_000, seed=42, param_prior=None):
+    from .param_prior import DEFAULT_PARAM_PRIOR, make_target_logpdf_vec
+
+    prior = param_prior or DEFAULT_PARAM_PRIOR
     X_obs = jnp.asarray(X_obs, dtype=float)
     y_obs = jnp.ravel(jnp.asarray(y_obs, dtype=float))
     p_obs = int(X_obs.shape[1])
     k_init, k_smc = random.split(random.key(seed))
     smc_run = SMC(
         dims=1 + p_obs,
-        target_dist_logpdf=partial(target_logpdf_vec, X_observed=X_obs, y_observed=y_obs),
-        prior_dist_logpdf=prior_logpdf_vec,
+        target_dist_logpdf=make_target_logpdf_vec(prior, X_obs, y_obs),
+        prior_dist_logpdf=prior.log_pdf_vec,
         proposed_fn=proposed_fn_vec,
         key=k_smc,
     )
-    smc_run.reset(samples=gen_initial_samples(no_samples, p_obs, k_init))
+    smc_run.reset(samples=prior.gen_initial_samples(no_samples, p_obs, k_init))
     lam_path, log_z = smc_run.build_intermediate_dists()
     particles = np.array(smc_run.get_current_sample_list())
     return {

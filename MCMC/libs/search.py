@@ -18,7 +18,8 @@ from typing import Sequence
 
 import numpy as np
 
-from .stage2_worker import mask_to_set_indexes, prior_logpdf_vec, run_smc_on_data
+from .param_prior import DEFAULT_PARAM_PRIOR, ParamPrior
+from .stage2_worker import mask_to_set_indexes, run_smc_on_data
 
 
 @dataclass
@@ -91,11 +92,13 @@ class SearchStrategy(ABC):
     def __init__(
         self,
         model_prior: ModelPrior | None = None,
+        param_prior: ParamPrior | None = None,
         n_particles: int = 5_000,
         seed: int = 42,
         verbose: bool = True,
     ):
         self.model_prior = model_prior or IndependentInclusionPrior(rho=0.5)
+        self.param_prior = param_prior or DEFAULT_PARAM_PRIOR
         self.n_particles = int(n_particles)
         self.seed = int(seed)
         self.verbose = bool(verbose)
@@ -120,11 +123,12 @@ class SearchStrategy(ABC):
             y,
             no_samples=self.n_particles,
             seed=self.seed + int(mask),
+            param_prior=self.param_prior,
         )
         particles = np.asarray(smc_out["particles"])
         log_evidence = float(smc_out["log_evidence"])
         log_model_prior = float(self.model_prior.log_prob(mask, n_predictors))
-        log_param_prior = float(np.mean(np.asarray(prior_logpdf_vec(particles))))
+        log_param_prior = float(np.mean(np.asarray(self.param_prior.log_pdf_vec(particles))))
         return {
             "mask": int(mask),
             "included_indices": idx,
