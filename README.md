@@ -2,6 +2,8 @@
 
 Topics covered: 
 
-1. MCMC - SMC
-2. Simulated Tempering (ST) 
-3. Machine Learning. (Soon) 
+1. MCMC
+2. SMC Samplers 
+3. Tempering Algorithms (Simulated, Parallel)
+4. Machine Learning
+5. Generative Models (Diffusion)
