@@ -141,12 +141,20 @@ class SMC:
         self.__cur_samples = next_samples
         self.__cur_samples_logpdf = next_dist_logpdf(next_samples)
 
-    def build_intermediate_dists(self, max_steps=64, n_bisect=30, mcmc_iters=10):
+    def build_intermediate_dists(
+        self, max_steps=64, n_bisect=30, mcmc_iters=10, verbose=False
+    ):
         r"""
         Build pi_0 -> ... -> pi_T adaptively.
 
         Outer loop:  lax.while_loop  (keep adding lambda while ESS to 1 is low)
         Inner search: lax.fori_loop  (binary search next lambda by ESS)
+
+        Parameters
+        ----------
+        verbose : bool, default False
+            If True, print current lambda at each adaptive tempering step via
+            ``jax.debug.print`` (visible during JIT / lax loop execution).
         """
         base = self._base_logpdf
         target = self.__target_dist_logpdf
@@ -170,18 +178,27 @@ class SMC:
 
         def body(carry):
             samples, cur_lp, key, lam, t, lambdas, tot_diff_log_z = carry
-            #jax.debug.print("Current loop value: {lam}", lam=lam)
             log_ratio = target(samples) - base(samples)
             lam_next = self.__find_next_lambda(log_ratio, lam, n_bisect=n_bisect)
             samples, cur_lp, diff_log_z, key = self.__temper_step(
                 samples, cur_lp, key, lam_next, mcmc_iters=mcmc_iters
             )
+            if verbose:
+                jax.debug.print(
+                    "[SMC] step {t}: lambda={lam} -> {lam_next}, diff_log_z={dz}",
+                    t=t,
+                    lam=lam,
+                    lam_next=lam_next,
+                    dz=diff_log_z,
+                )
             lambdas = lambdas.at[t + 1].set(lam_next)
             return samples, cur_lp, key, lam_next, t + 1, lambdas, tot_diff_log_z + diff_log_z
 
         samples, cur_lp, key, lam, t, lambdas, tot_diff_log_z = lax.while_loop(cond, body, init)
 
         # final jump to lambda = 1
+        if verbose:
+            print(f"[SMC] final step: lambda={float(lam)} -> 1.0")
         samples, cur_lp, diff_log_z, key = self.__temper_step(
             samples, cur_lp, key, 1.0, mcmc_iters=mcmc_iters
         )
