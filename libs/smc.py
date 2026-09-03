@@ -155,29 +155,44 @@ class SMC:
         verbose : bool, default False
             If True, print current lambda at each adaptive tempering step via
             ``jax.debug.print`` (visible during JIT / lax loop execution).
+
+        Returns
+        -------
+        lambda_list : list[float]
+            Tempering schedule ``[0 = lambda_0, ..., 1 = lambda_T]``.
+        log_z_list : list[float]
+            Cumulative normalizing constants ``log Z_i`` for each intermediate
+            distribution (``log_z_list[i]`` pairs with ``lambda_list[i]``).
+            Assumes the base/prior is normalized, so ``log Z_0 = 0``.
+        tot_log_z : float
+            Final evidence estimate ``log Z_T`` (same as ``log_z_list[-1]``).
         """
         base = self._base_logpdf
         target = self.__target_dist_logpdf
 
+        # Parallel arrays: lambdas[i] <-> log_zs[i] = log Z_{lambda_i}
+        # Convention: prior/base is normalized => log Z_0 = 0 at lambda=0.
         lambdas = jnp.full((max_steps + 2,), jnp.nan).at[0].set(0.0)
+        log_zs = jnp.full((max_steps + 2,), jnp.nan).at[0].set(0.0)
         init = (
             self.__cur_samples,
             self.__cur_samples_logpdf,
             self.__key,
             jnp.asarray(0.0),   # lambda_cur
             jnp.asarray(0),     # step index
-            lambdas,   
-            0, # tot_diff_log_z 
+            lambdas,
+            log_zs,
+            jnp.asarray(0.0),   # tot_diff_log_z (== log_zs[t] while running)
         )
 
         def cond(carry):
-            samples, _, _, lam, t, _, _ = carry
+            samples, _, _, lam, t, _, _, _ = carry
             log_ratio = target(samples) - base(samples)
             ess_to_one = self.__relative_ess(log_ratio, 1.0 - lam)
             return (ess_to_one < ESS_THRESHOLD) & (t < max_steps) & (lam < 1.0 - 1e-5)
 
         def body(carry):
-            samples, cur_lp, key, lam, t, lambdas, tot_diff_log_z = carry
+            samples, cur_lp, key, lam, t, lambdas, log_zs, tot_diff_log_z = carry
             log_ratio = target(samples) - base(samples)
             lam_next = self.__find_next_lambda(log_ratio, lam, n_bisect=n_bisect)
             samples, cur_lp, diff_log_z, key = self.__temper_step(
@@ -191,10 +206,14 @@ class SMC:
                     lam_next=lam_next,
                     dz=diff_log_z,
                 )
+            tot_next = tot_diff_log_z + diff_log_z
             lambdas = lambdas.at[t + 1].set(lam_next)
-            return samples, cur_lp, key, lam_next, t + 1, lambdas, tot_diff_log_z + diff_log_z
+            log_zs = log_zs.at[t + 1].set(tot_next)
+            return samples, cur_lp, key, lam_next, t + 1, lambdas, log_zs, tot_next
 
-        samples, cur_lp, key, lam, t, lambdas, tot_diff_log_z = lax.while_loop(cond, body, init)
+        samples, cur_lp, key, lam, t, lambdas, log_zs, tot_diff_log_z = lax.while_loop(
+            cond, body, init
+        )
 
         # final jump to lambda = 1
         if verbose:
@@ -202,14 +221,19 @@ class SMC:
         samples, cur_lp, diff_log_z, key = self.__temper_step(
             samples, cur_lp, key, 1.0, mcmc_iters=mcmc_iters
         )
+        tot_diff_log_z = tot_diff_log_z + diff_log_z
         lambdas = lambdas.at[t + 1].set(1.0)
-        tot_diff_log_z += diff_log_z
+        log_zs = log_zs.at[t + 1].set(tot_diff_log_z)
 
         self.__cur_samples = samples
         self.__cur_samples_logpdf = cur_lp
         self.__key = key
 
-        return [float(x) for x in lambdas[~jnp.isnan(lambdas)]], tot_diff_log_z
+        valid = ~jnp.isnan(lambdas)
+        lambda_list = [float(x) for x in lambdas[valid]]
+        log_z_list = [float(x) for x in log_zs[valid]]
+        # (lambdas, intermediate log Z_i, total log Z_T)
+        return lambda_list, log_z_list, tot_diff_log_z
 
     def _get_proposed_fn(self, samples):
         r"""

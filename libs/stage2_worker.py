@@ -162,12 +162,13 @@ def run_smc_on_data(X_obs, y_obs, no_samples=5_000, seed=42, param_prior=None):
         key=k_smc,
     )
     smc_run.reset(samples=prior.gen_initial_samples(no_samples, p_obs, k_init))
-    lam_path, log_z = smc_run.build_intermediate_dists()
+    lam_path, log_z_path, log_z = smc_run.build_intermediate_dists()
     particles = np.array(smc_run.get_current_sample_list())
     return {
         "particles": particles,
         "log_evidence": float(log_z),
         "lambda_path": lam_path,
+        "log_z_path": log_z_path,
     }
 
 
