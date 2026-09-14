@@ -141,6 +141,12 @@ class SMC:
         self.__cur_samples = next_samples
         self.__cur_samples_logpdf = next_dist_logpdf(next_samples)
 
+    def _particle_cov(self, samples):
+        """Empirical Cov of a particle cloud, shape (dims, dims)."""
+        flat = samples.reshape((samples.shape[0], self.__dims))
+        cov = jnp.atleast_2d(jnp.cov(flat, rowvar=False))
+        return cov.reshape((self.__dims, self.__dims))
+
     def build_intermediate_dists(
         self, max_steps=64, n_bisect=30, mcmc_iters=10, verbose=False
     ):
@@ -166,14 +172,20 @@ class SMC:
             Assumes the base/prior is normalized, so ``log Z_0 = 0``.
         tot_log_z : float
             Final evidence estimate ``log Z_T`` (same as ``log_z_list[-1]``).
+        cov_path : jnp.ndarray, shape (n_levels, dims, dims)
+            Empirical particle covariance at each ladder level (for ST proposals).
         """
         base = self._base_logpdf
         target = self.__target_dist_logpdf
+        d = self.__dims
 
         # Parallel arrays: lambdas[i] <-> log_zs[i] = log Z_{lambda_i}
         # Convention: prior/base is normalized => log Z_0 = 0 at lambda=0.
         lambdas = jnp.full((max_steps + 2,), jnp.nan).at[0].set(0.0)
         log_zs = jnp.full((max_steps + 2,), jnp.nan).at[0].set(0.0)
+        covs = jnp.zeros((max_steps + 2, d, d)).at[0].set(
+            self._particle_cov(self.__cur_samples)
+        )
         init = (
             self.__cur_samples,
             self.__cur_samples_logpdf,
@@ -182,17 +194,18 @@ class SMC:
             jnp.asarray(0),     # step index
             lambdas,
             log_zs,
+            covs,
             jnp.asarray(0.0),   # tot_diff_log_z (== log_zs[t] while running)
         )
 
         def cond(carry):
-            samples, _, _, lam, t, _, _, _ = carry
+            samples, _, _, lam, t, _, _, _, _ = carry
             log_ratio = target(samples) - base(samples)
             ess_to_one = self.__relative_ess(log_ratio, 1.0 - lam)
             return (ess_to_one < ESS_THRESHOLD) & (t < max_steps) & (lam < 1.0 - 1e-5)
 
         def body(carry):
-            samples, cur_lp, key, lam, t, lambdas, log_zs, tot_diff_log_z = carry
+            samples, cur_lp, key, lam, t, lambdas, log_zs, covs, tot_diff_log_z = carry
             log_ratio = target(samples) - base(samples)
             lam_next = self.__find_next_lambda(log_ratio, lam, n_bisect=n_bisect)
             samples, cur_lp, diff_log_z, key = self.__temper_step(
@@ -209,9 +222,10 @@ class SMC:
             tot_next = tot_diff_log_z + diff_log_z
             lambdas = lambdas.at[t + 1].set(lam_next)
             log_zs = log_zs.at[t + 1].set(tot_next)
-            return samples, cur_lp, key, lam_next, t + 1, lambdas, log_zs, tot_next
+            covs = covs.at[t + 1].set(self._particle_cov(samples))
+            return samples, cur_lp, key, lam_next, t + 1, lambdas, log_zs, covs, tot_next
 
-        samples, cur_lp, key, lam, t, lambdas, log_zs, tot_diff_log_z = lax.while_loop(
+        samples, cur_lp, key, lam, t, lambdas, log_zs, covs, tot_diff_log_z = lax.while_loop(
             cond, body, init
         )
 
@@ -224,6 +238,7 @@ class SMC:
         tot_diff_log_z = tot_diff_log_z + diff_log_z
         lambdas = lambdas.at[t + 1].set(1.0)
         log_zs = log_zs.at[t + 1].set(tot_diff_log_z)
+        covs = covs.at[t + 1].set(self._particle_cov(samples))
 
         self.__cur_samples = samples
         self.__cur_samples_logpdf = cur_lp
@@ -232,8 +247,9 @@ class SMC:
         valid = ~jnp.isnan(lambdas)
         lambda_list = [float(x) for x in lambdas[valid]]
         log_z_list = [float(x) for x in log_zs[valid]]
-        # (lambdas, intermediate log Z_i, total log Z_T)
-        return lambda_list, log_z_list, tot_diff_log_z
+        cov_path = covs[valid]
+        self.last_cov_path = cov_path
+        return lambda_list, log_z_list, tot_diff_log_z, cov_path
 
     def _get_proposed_fn(self, samples):
         r"""
