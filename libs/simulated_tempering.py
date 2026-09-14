@@ -22,36 +22,31 @@ class TemperingState:
 class SimulatedTempering:
     """Simulated Tempering on an SMC tempering ladder.
 
-    Joint target (uniform temperature prior):
-        pi(t, x) ∝ pi_t(x) = tilde_pi_{lambda_t}(x) / Z_t
+    Pass an SMC that has already run ``build_intermediate_dists()``.
+    Ladder data (``lambda_path``, ``log_z_path``, ``cov_path``, ``dims``,
+    ``proposed_fn``) is read from that object.
 
     Moves
     -----
-    explore : x' = x + N(0, ((2.38)^2 / d) * Cov_t), MH at fixed t
-              Cov_t comes from SMC particle clouds (pass ``cov_path``)
+    explore : Gaussian MH with SMC ``Cov_t``, or SMC ``proposed_fn`` if set
     jump    : t' in {t-1, t+1} (boundary-aware proposal q)
-
-    Sampling
-    --------
-    ``run`` vmaps many ``run_excursion(x0, key)`` with frozen Cov_t.
     """
 
     def __init__(
         self,
         smc: SMC,
-        lambda_path,
-        log_z_path,
-        cov_path=None,
-        step_size: float = 0.1,
         seed: int = 0,
-        dims: int = 1,
         max_cold_keep: int = 64,
         cov_reg: float = 1e-6,
-        proposed_fn=None,
+        step_size: float = 0.1,
     ):
+        if smc.lambda_path is None or smc.log_z_path is None:
+            raise ValueError(
+                "SMC has no ladder yet; call smc.build_intermediate_dists() first"
+            )
         self.smc = smc
-        self.lambda_path = jnp.asarray(lambda_path, dtype=float)
-        self.log_z_path = jnp.asarray(log_z_path, dtype=float)
+        self.lambda_path = jnp.asarray(smc.lambda_path, dtype=float)
+        self.log_z_path = jnp.asarray(smc.log_z_path, dtype=float)
         if self.lambda_path.shape != self.log_z_path.shape:
             raise ValueError("lambda_path and log_z_path must have the same length")
         if int(self.lambda_path.shape[0]) < 2:
@@ -59,22 +54,20 @@ class SimulatedTempering:
         self.n_levels = int(self.lambda_path.shape[0])
         self.t_cold = self.n_levels - 1
         self.t_hot = 0
-        self.step_size = float(step_size)
-        self.dims = int(dims)
+        self.dims = int(smc.dims)
+        self.proposed_fn = smc.proposed_fn
         self.max_cold_keep = int(max_cold_keep)
         self.cov_reg = float(cov_reg)
-        self.proposed_fn = proposed_fn
+        self.step_size = float(step_size)
         self._key = random.key(seed)
 
         if self.proposed_fn is not None:
             self.covs = None
-        elif cov_path is not None:
-            self.covs = jnp.asarray(cov_path, dtype=float)
-            if self.covs.shape != (self.n_levels, self.dims, self.dims):
-                raise ValueError(
-                    f"cov_path shape {self.covs.shape} != "
-                    f"({self.n_levels}, {self.dims}, {self.dims})"
-                )
+        elif smc.cov_path is not None:
+            self.covs = jnp.asarray(smc.cov_path, dtype=float)
+            expected = (self.n_levels, self.dims, self.dims)
+            if self.covs.shape != expected:
+                raise ValueError(f"cov_path shape {self.covs.shape} != {expected}")
         else:
             eye = jnp.eye(self.dims)
             self.covs = jnp.stack(

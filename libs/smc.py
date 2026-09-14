@@ -22,6 +22,19 @@ class SMC:
         self.__cur_samples_logpdf = None
         self.__proposed_fn = proposed_fn
         self.__key = key
+        # Filled by build_intermediate_dists (used by SimulatedTempering)
+        self.lambda_path = None
+        self.log_z_path = None
+        self.cov_path = None
+        self.tot_log_z = None
+
+    @property
+    def dims(self):
+        return self.__dims
+
+    @property
+    def proposed_fn(self):
+        return self.__proposed_fn
 
     def _split_key(self):
         self.__key, sub_key = random.split(self.__key)
@@ -248,7 +261,10 @@ class SMC:
         lambda_list = [float(x) for x in lambdas[valid]]
         log_z_list = [float(x) for x in log_zs[valid]]
         cov_path = covs[valid]
-        self.last_cov_path = cov_path
+        self.lambda_path = lambda_list
+        self.log_z_path = log_z_list
+        self.cov_path = cov_path
+        self.tot_log_z = tot_diff_log_z
         return lambda_list, log_z_list, tot_diff_log_z, cov_path
 
     def _get_proposed_fn(self, samples):
