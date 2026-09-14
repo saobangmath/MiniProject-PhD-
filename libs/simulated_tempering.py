@@ -134,21 +134,18 @@ class SimulatedTempering:
         visits0 = jnp.zeros((self.n_levels,), dtype=jnp.int32)
 
         def scan_step(carry, _):
-            t_idx, x, key, left_hot, done, cold_buf, cold_n, visits = carry
+            t_idx, x, key, done, cold_buf, cold_n, visits = carry
             key, k_move = random.split(key)
 
             def do_move(_):
-                t_new, x_new, key_new = self.move(t_idx, x, k_move, covs=covs)
-                left_new = left_hot | (t_new != self.t_hot)
-                done_new = left_new & (t_new == self.t_hot)
-                return t_new, x_new, key_new, left_new, done_new
+                return self.move(t_idx, x, k_move, covs=covs)
 
             def stay(_):
-                return t_idx, x, key, left_hot, done
+                return t_idx, x, key
 
-            t_new, x_new, key_new, left_new, done_new = lax.cond(
-                done, stay, do_move, operand=None
-            )
+            t_new, x_new, key_new = lax.cond(done, stay, do_move, operand=None)
+            # Done once we return to hot from a non-hot level.
+            done_new = done | ((t_idx != self.t_hot) & (t_new == self.t_hot))
             was_live = ~done
             visits_new = visits.at[t_new].add(was_live.astype(jnp.int32))
             store = was_live & (t_new == self.t_cold) & (cold_n < self.max_cold_keep)
@@ -158,7 +155,6 @@ class SimulatedTempering:
                 t_new,
                 x_new,
                 key_new,
-                left_new,
                 done_new,
                 cold_buf_new,
                 cold_n_new,
@@ -171,12 +167,11 @@ class SimulatedTempering:
             x0,
             key,
             jnp.asarray(False),
-            jnp.asarray(False),
             cold_buf0,
             jnp.asarray(0, dtype=jnp.int32),
             visits0,
         )
-        (_t, _x, _k, _l, _d, cold_buf, cold_n, visits), live = lax.scan(
+        (_t, _x, _k, _d, cold_buf, cold_n, visits), live = lax.scan(
             scan_step, init, xs=None, length=max_steps
         )
         n_steps = jnp.sum(live.astype(jnp.int32))
