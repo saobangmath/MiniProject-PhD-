@@ -7,6 +7,7 @@ from dataclasses import dataclass
 import jax.numpy as jnp
 import numpy as np
 from jax import lax, random, vmap
+from tqdm import trange
 
 from .smc import MAGIC_CONST, SMC
 
@@ -202,16 +203,18 @@ class SimulatedTempering:
         visit_counts = jnp.sum(visits, axis=0)
         return cold_samples, n_steps, visit_counts
 
-    def run_chain(
+    def run_and_stop_at_next_cold(
         self,
         x0,
         n_iters: int = 5_000,
         key=None,
         score_fn=None,
-        print_every: int = 500,
         start_at_hot: bool = True,
     ):
-        """Sequential ST for n_iters; useful for discrete targets (e.g. Sudoku)."""
+        """Sequential ST for n_iters; useful for discrete targets (e.g. Sudoku).
+
+        Prints only when ``score_fn`` improves. Stops early if score hits 0.
+        """
         if key is None:
             self._key, key = random.split(self._key)
         x = jnp.asarray(x0)
@@ -221,20 +224,11 @@ class SimulatedTempering:
         x_best = None
         best_score = jnp.inf
         found = False
-        visit_counts = np.zeros(self.n_levels, dtype=int)
 
-        for i in range(n_iters):
+        for i in trange(n_iters):
             key, k_move = random.split(key)
             t_idx, x, key = self.move(t_idx, x, k_move, covs=self.covs)
             t_int = int(t_idx)
-            visit_counts[t_int] += 1
-
-            s_val = float(score_fn(x)) if score_fn is not None else None
-            if (i + 1) % print_every == 0:
-                print(
-                    f"[chain] step={i+1:5d}  t={t_int}  "
-                    f"score={s_val if s_val is not None else float('nan'):.0f}"
-                )
 
             if score_fn is None:
                 if t_int == self.t_cold:
@@ -242,6 +236,7 @@ class SimulatedTempering:
                     x_best = x
                 continue
 
+            s_val = float(score_fn(x))
             if s_val < float(best_score):
                 best_score = s_val
                 x_best = x
@@ -253,13 +248,6 @@ class SimulatedTempering:
 
             if s_val == 0.0:
                 found = True
-                print(f"[chain] FOUND score=0 at step {i+1} (t={t_int})")
-                print(np.asarray(x).reshape(9, 9) if x.size == 81 else np.asarray(x))
                 break
 
-        print(f"[chain] temperature visits: {visit_counts.tolist()}")
-        if not found:
-            print(f"[chain] done {n_iters} steps; best score={best_score}")
-            if x_best is not None and x_best.size == 81:
-                print(np.asarray(x_best).reshape(9, 9))
         return x_best, history, found
