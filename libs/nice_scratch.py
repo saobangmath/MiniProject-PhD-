@@ -53,16 +53,16 @@ class CouplingLayer(nn.Module):
 
 
 class ScalingLayer(nn.Module):
-    """Diagonal scaling: y_i = s_i * x_i. Length of ``scaling_factors`` should be D."""
-
-    scaling_factors: Sequence[float]
+    """Learnable diagonal scaling: y = exp(log_s) ⊙ x; log-det = sum(log_s)."""
 
     @nn.compact
     def __call__(self, x, reverse: bool = False):
-        s = jnp.asarray(self.scaling_factors)
+        log_s = self.param(
+            "log_scale", nn.initializers.zeros, (x.shape[-1],)
+        )
         if reverse:
-            return x / s
-        return x * s
+            return x * jnp.exp(-log_s), -jnp.sum(log_s)
+        return x * jnp.exp(log_s), jnp.sum(log_s)
 
 
 class NICE(nn.Module):
@@ -80,18 +80,15 @@ class NICE(nn.Module):
             )
             for i in range(self.no_layers)
         ]
-        # identity diagonal for now (fixed, not learned)
-        self.scaling = ScalingLayer(
-            scaling_factors=[1.0] * self.layer_size
-        )
+        self.scaling = ScalingLayer()
 
     def __call__(self, x, reverse: bool = False):
-        """f: data→latent (reverse=False); f^{-1}: latent→data (reverse=True)."""
+        """Returns (transformed, log|det|). forward: data→latent; reverse: latent→data."""
         if reverse:
-            h = self.scaling(x, reverse=True)
+            h, log_det = self.scaling(x, reverse=True)
             for layer in reversed(self.couplings):
                 h = layer(h, reverse=True)
-            return h
+            return h, log_det
         h = x
         for layer in self.couplings:
             h = layer(h, reverse=False)
