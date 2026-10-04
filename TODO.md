@@ -1,5 +1,5 @@
 1. Normalizing Flow to simulate Half-Moon. 
- - NF with NICE and rescaling layer. 
+ - NF with NICE and rescaling layer. [Done]
 
 
 1.5. Sampling with Diffusion + NF with resampling. 
