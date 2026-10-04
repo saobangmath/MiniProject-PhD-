@@ -12,5 +12,6 @@
 
 X -> K-1 (X - mean)
 p(x) -> | det(K) 
+[Done]
 
 Read stuffs relate to state space model, ARMA, GARCH, Online Learning 
