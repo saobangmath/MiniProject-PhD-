@@ -84,3 +84,15 @@ class NICE(nn.Module):
         self.scaling = ScalingLayer(
             scaling_factors=[1.0] * self.layer_size
         )
+
+    def __call__(self, x, reverse: bool = False):
+        """f: data→latent (reverse=False); f^{-1}: latent→data (reverse=True)."""
+        if reverse:
+            h = self.scaling(x, reverse=True)
+            for layer in reversed(self.couplings):
+                h = layer(h, reverse=True)
+            return h
+        h = x
+        for layer in self.couplings:
+            h = layer(h, reverse=False)
+        return self.scaling(h, reverse=False)
