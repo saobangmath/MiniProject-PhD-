@@ -10,3 +10,4 @@ diffrax
 scikit-learn
 ucimlrepo
 flax
+posteriordb
